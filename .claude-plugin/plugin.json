@@ -1,6 +1,6 @@
 {
   "name": "live-board",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Show what every Claude Code session is working on, on a local progress board grouped by project.",
   "author": { "name": "Sora-bluesky" },
   "license": "MIT",

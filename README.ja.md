@@ -51,7 +51,7 @@ claude plugin install live-board@live-board
 
 プラグインがClaude Codeのセッションを自動で記録し、記録された作業フォルダー（Gitリポジトリ内ではルート）ごとに1つのプロジェクトとして表示します。同じフォルダーのセッションは1つのプロジェクトにまとまり、設定ファイルを自分で編集する必要はありません。
 
-[スキル](skills/live-board/SKILL.md)は `${CLAUDE_PLUGIN_DATA}/projects.json` がなければセッション用の設定を作り、追加の正本や非表示フォルダーもそこで管理します。このフォルダーはプラグイン更新後も残ります。`${CLAUDE_PLUGIN_DATA}` はスキル本文で置換する値で、シェル環境変数ではありません。設定変更の反映には盤の再起動が必要です。Claudeが起動した盤はClaudeが再起動し、`/healthz` を確認します。
+[スキル](skills/live-board/SKILL.md)は `${CLAUDE_PLUGIN_DATA}/projects.json` がなければセッション用の設定を作り、追加の正本や非表示フォルダーもそこで管理します。v0.1.0からの設定にセッション用の項目がない場合は、追加するか確認します。このフォルダーはプラグイン更新後も残ります。`${CLAUDE_PLUGIN_DATA}` はスキル本文で置換する値で、シェル環境変数ではありません。設定変更の反映には盤の再起動が必要です。Claudeが起動した盤はClaudeが再起動し、`/healthz` を確認します。
 
 ### 手動セットアップ
 

@@ -51,7 +51,7 @@ Ask Claude Code to open and manage the board:
 
 The plugin records Claude Code sessions automatically and shows one board project per recorded working folder (the Git root inside a repository). Tasks from sessions in the same folder share that project; no config editing is needed.
 
-The [skill](skills/live-board/SKILL.md) creates `${CLAUDE_PLUGIN_DATA}/projects.json` with a session source if missing, and manages additional sources and hidden folders there. This folder survives plugin updates; `${CLAUDE_PLUGIN_DATA}` is a skill-body substitution, not a shell environment variable. Config changes need a board restart; Claude restarts a board it started and checks `/healthz`.
+The [skill](skills/live-board/SKILL.md) creates `${CLAUDE_PLUGIN_DATA}/projects.json` with a session source if missing, and manages additional sources and hidden folders there. For a config from v0.1.0, the skill asks before adding the session source if it is missing. This folder survives plugin updates; `${CLAUDE_PLUGIN_DATA}` is a skill-body substitution, not a shell environment variable. Config changes need a board restart; Claude restarts a board it started and checks `/healthz`.
 
 ### Manual setup
 
