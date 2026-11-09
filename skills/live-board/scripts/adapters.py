@@ -1,7 +1,11 @@
 import importlib.util
+import hashlib
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 import json
+import os
 from pathlib import Path
+import re
 import unicodedata
 
 from pr_status import pr_numbers
@@ -162,4 +166,160 @@ def wbs_cards(project):
     }
 
 
-ADAPTERS = {"winsmux-backlog": winsmux_backlog, "wbs-cards": wbs_cards}
+def session_time(value):
+    timestamp = datetime.fromisoformat(value)
+    if timestamp.tzinfo is None:
+        raise ValueError("Session timestamps require a timezone")
+    return timestamp
+
+
+def folder_name(value):
+    return Path(value.replace("\\", "/")).name or value
+
+
+def session_project_path(value):
+    return os.path.normcase(os.path.abspath(os.path.normpath(value))).replace("\\", "/")
+
+
+def session_project_id(value):
+    path = session_project_path(value)
+    slug = re.sub(r"[^a-z0-9_-]", "-", folder_name(path).lower())
+    return f"{slug}-{hashlib.sha256(path.encode('utf-8')).hexdigest()[:6]}"
+
+
+def read_sessions(source):
+    folder = Path(source)
+    now = datetime.now(timezone.utc)
+    records, warnings = [], []
+    if folder.exists() and not folder.is_dir():
+        raise ValueError("claude-sessions の source はセッションフォルダーにしてください。")
+    for path in sorted(folder.glob("*.json")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            with path.open(encoding="utf-8") as stream:
+                record = json.load(stream)
+            if (not isinstance(record, dict) or type(record.get("schema")) is not int or record["schema"] != 1
+                    or any(not isinstance(record.get(key), str) or not record[key]
+                           for key in ("session_id", "cwd", "project", "started_at", "updated_at"))
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", record["session_id"])
+                    or record["session_id"] != path.stem
+                    or type(record.get("waiting_for_user")) is not bool
+                    or not isinstance(record.get("last_prompt"), str)
+                    or not isinstance(record.get("tasks"), list)):
+                raise ValueError("Invalid session record")
+            session_time(record["started_at"])
+            if not Path(record["project"]).is_absolute():
+                raise ValueError("Session project requires an absolute path")
+            session_time(record["updated_at"])
+            ended = session_time(record["ended_at"]) if record["ended_at"] is not None else None
+            if ended is not None and ended < now - timedelta(days=1):
+                continue
+            seen = set()
+            for task in record["tasks"]:
+                if (not isinstance(task, dict) or not isinstance(task.get("id"), str) or not task["id"]
+                        or task["id"] in seen or not isinstance(task.get("text"), str)
+                        or task.get("status") not in {"pending", "in_progress", "completed"}):
+                    raise ValueError("Invalid session task")
+                seen.add(task["id"])
+        except (OSError, ValueError, TypeError, KeyError):
+            warnings.append(f"セッション記録 {quote_file_value(path.name)}: 読み込めない記録を除外しました。")
+            continue
+        records.append(record)
+    return records, warnings
+
+
+def read_session_sources(project):
+    records, warnings, failed_sources = {}, [], {}
+    folder_providers = {}
+    for provider in project.get("session_providers", [project]):
+        try:
+            sessions, messages = read_sessions(provider["source"])
+        except (OSError, ValueError) as error:
+            failed_sources[provider["source"]] = error
+            continue
+        warnings.extend(messages)
+        hidden = {session_project_path(path) for path in provider.get("hidden", [])}
+        for record in sessions:
+            path = session_project_path(record["project"])
+            if path in hidden:
+                continue
+            contributors = folder_providers.setdefault(path, [])
+            if provider not in contributors:
+                contributors.append(provider)
+            key = (path, record["session_id"])
+            previous = records.get(key)
+            if previous is None or session_time(record["updated_at"]) > session_time(previous[0]["updated_at"]):
+                # Keep folder provenance even when a later provider wins a record.
+                records[key] = (record, contributors)
+    return list(records.values()), list(dict.fromkeys(warnings)), failed_sources
+
+
+def session_projects(project):
+    records, warnings, failed_sources = read_session_sources(project)
+    groups = {}
+    for record, providers in records:
+        path = session_project_path(record["project"])
+        groups.setdefault(path, ([], providers))[0].append(record)
+    projects = []
+    for path, (sessions, providers) in groups.items():
+        owner = providers[0]
+        config = {**owner, "id": session_project_id(path),
+                  "name": folder_name(sessions[0]["project"]) or owner["name"],
+                  "session_project": path, "session_providers": providers}
+        projects.append((config, claude_sessions(config, sessions, warnings)))
+    return sorted(projects, key=lambda item: (
+        not item[1]["meta"]["session_active"],
+        -session_time(item[1]["meta"]["updated"]).timestamp(), item[0]["id"],
+    )), set(failed_sources)
+
+
+def claude_sessions(project, records=None, warnings=None):
+    failed_sources = {}
+    if records is None:
+        sourced_records, warnings, failed_sources = read_session_sources(project)
+        records = [record for record, _ in sourced_records]
+    if "session_project" in project:
+        records = [record for record in records
+                   if session_project_path(record["project"]) == project["session_project"]]
+    if failed_sources:
+        raise next(iter(failed_sources.values()))
+    tasks, hidden, updated = [], 0, ""
+    section = project["name"]
+    for record in records:
+        modified = session_time(record["updated_at"])
+        updated = max(updated, modified.astimezone(timezone.utc).isoformat())
+        ended = record["ended_at"] is not None
+        session_id = record["session_id"]
+        entries = record["tasks"]
+        if not entries:
+            entries = [{"id": "prompt", "text": record["last_prompt"] or "作業中のセッション", "status": "in_progress"}]
+        for entry in entries:
+            if entry["status"] == "completed":
+                hidden += 1
+                continue
+            status, raw_status = {"pending": ("todo", "p-hold"), "in_progress": ("doing", "p-run")}[entry["status"]]
+            paused = ended and entry["status"] == "in_progress"
+            if paused:
+                status, raw_status = "todo", "p-hold"
+            elif entry["status"] == "in_progress" and record["waiting_for_user"]:
+                status, raw_status = "blocked", "p-owner"
+            title = entry["text"]
+            tasks.append({
+                "id": f"{session_id}:{entry['id']}", "title": title, "phase": section, "version": "",
+                "status": status, "raw_status": raw_status,
+                "note": session_id[:8], "label": "休止中" if paused else "", "ball": False,
+                "done_when": "", "deps": "", "blocked_by": "", "ready": "yes" if status == "todo" else "no",
+                "source_fields": {"text": title, "status": raw_status, "section": section,
+                                  "paused": paused},
+            })
+    phases = [{"id": section, "title": section, "order": 0, "is_current": "no",
+               "status": next((status for status in ("doing", "blocked", "todo")
+                               if any(task["status"] == status for task in tasks)), "done")}] if records else []
+    return {"rows": {"phases": phases, "versions": [], "tasks": tasks},
+            "meta": {"product": project["name"], "updated": updated, "current_phase": "",
+                     "session_active": any(record["ended_at"] is None for record in records)},
+            "done_hidden": hidden, "warnings": warnings or [], "style_warnings": []}
+
+
+ADAPTERS = {"winsmux-backlog": winsmux_backlog, "wbs-cards": wbs_cards, "claude-sessions": claude_sessions}

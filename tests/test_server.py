@@ -1018,6 +1018,34 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(board.revisions["wbs"], 2)
         self.assertTrue(board.pr_wakeup.is_set())
 
+    def test_watcher_logs_unexpected_errors_and_retries_after_poll_interval(self):
+        server = self.load_module("server")
+        board = server.Board({"projects": [self.project]})
+        with mock.patch.object(board.stopping, "wait", side_effect=[False, False, True]) as wait, \
+                mock.patch.object(board, "refresh_projects", side_effect=[RuntimeError("private detail"), None]) as refresh:
+            with self.assertLogs(server.__name__, level="ERROR") as logs:
+                board.watch()
+        self.assertEqual(refresh.call_count, 2)
+        self.assertEqual(wait.call_args_list, [mock.call(server.POLL_SECONDS)] * 3)
+        self.assertIn("RuntimeError", " ".join(logs.output))
+        self.assertNotIn("private detail", " ".join(logs.output))
+
+    def test_unexpected_project_check_error_keeps_error_display_and_checks_sibling(self):
+        server = self.load_module("server")
+        board = server.Board({"projects": [self.project, {**self.project, "id": "sibling"}]})
+        first = board.projects[self.project["id"]]
+        sibling = board.projects["sibling"]
+        before = first.snapshot()["last_good"]
+        with mock.patch.object(board.stopping, "wait", side_effect=[False, True]), \
+                mock.patch.object(first, "check", side_effect=RuntimeError("private detail")), \
+                mock.patch.object(sibling, "check", wraps=sibling.check) as check:
+            with self.assertLogs(server.__name__, level="ERROR"):
+                board.watch()
+        check.assert_called_once()
+        self.assertEqual(first.snapshot()["last_good"], before)
+        self.assertIsNotNone(first.snapshot()["error"])
+        self.assertNotIn("private detail", first.snapshot()["error"]["message"])
+
     def test_activity_add_update_error_unmatched_and_removal_emit_sse(self):
         config = self.activity_project()
         with self.running_server([config]):
@@ -1127,6 +1155,54 @@ class BoardTests(unittest.TestCase):
                 stream.write(valid)
             self.httpd.board.projects["wbs"].check()
             self.assertIsNone(self.get_json("/api/summary")[1]["error"])
+
+    def test_session_folders_expand_in_api_and_sse_alongside_configured_projects(self):
+        from adapters import session_project_id
+        folder = self.root / "sessions"
+        folder.mkdir()
+        stamp = datetime.now(timezone.utc)
+
+        def write(name, ended=False):
+            updated = stamp - timedelta(hours=2) if name == "alpha" else stamp
+            record = {"schema": 1, "session_id": name, "project": str(self.root / name),
+                      "cwd": str(self.root / name), "started_at": updated.isoformat(),
+                      "updated_at": updated.isoformat(), "ended_at": stamp.isoformat() if ended else None,
+                      "waiting_for_user": False, "last_prompt": name, "tasks": []}
+            (folder / f"{name}.json").write_text(json.dumps(record), encoding="utf-8", newline="\n")
+
+        write("alpha")
+        write("beta", ended=True)
+        ids = {name: session_project_id(str(self.root / name)) for name in ("alpha", "beta", "gamma")}
+        provider = {"id": "sessions", "name": "Sessions", "adapter": "claude-sessions", "source": str(folder)}
+        with self.running_server([self.project, provider]):
+            expected = [{"id": self.project["id"], "name": self.project["name"]},
+                        {"id": ids["alpha"], "name": "alpha"}, {"id": ids["beta"], "name": "beta"}]
+            self.assertEqual(self.get_json("/api/projects"), expected)
+            self.assertIsNotNone(self.get_json(f"/api/projects/{self.project['id']}")["last_good"])
+            paused = self.get_json(f"/api/projects/{ids['beta']}")["last_good"]["rows"]["tasks"][0]
+            self.assertEqual((paused["status"], paused["label"]), ("todo", "休止中"))
+            connection = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port, timeout=5)
+            self.addCleanup(connection.close)
+            connection.request("GET", "/events")
+            response = connection.getresponse()
+            self.addCleanup(response.close)
+            self.assertEqual(response.readline(), b": connected\n")
+            self.assertEqual(response.readline(), b"\n")
+            write("gamma")
+            self.assertEqual(response.readline(), b"event: projects\n")
+            self.assertEqual(response.readline(), b"data: {}\n")
+            self.assertEqual(response.readline(), b"\n")
+            self.assertEqual(response.readline(), b"event: project\n")
+            self.assertEqual(json.loads(response.readline().decode().removeprefix("data: ")), ids["gamma"])
+            self.assertEqual(response.readline(), b"\n")
+            self.assertEqual(self.get_json("/api/projects"), [expected[0], {"id": ids["gamma"], "name": "gamma"}, *expected[1:]])
+            summaries = self.get_json("/api/summary")
+            self.assertEqual([item["id"] for item in summaries], [self.project["id"], ids["gamma"], ids["alpha"], ids["beta"]])
+            self.assertEqual(summaries[1]["counts"]["doing"], 1)
+            (folder / "gamma.json").unlink()
+            self.assertEqual(response.readline(), b"event: projects\n")
+            self.assertEqual(self.get_json("/api/projects"), expected)
+            self.assertNotIn(ids["gamma"], self.get_json("/healthz")["projects"])
 
     def test_wbs_update_emits_sse_and_updates_summary(self):
         wbs = self.wbs_project()

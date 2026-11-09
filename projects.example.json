@@ -1,6 +1,12 @@
 {
   "projects": [
     {
+      "id": "sessions",
+      "name": "Claude Code working folders (one project per folder)",
+      "adapter": "claude-sessions",
+      "source": "C:/path/to/plugin-data/sessions"
+    },
+    {
       "id": "winsmux",
       "name": "winsmux",
       "adapter": "winsmux-backlog",

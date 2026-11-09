@@ -20,7 +20,7 @@ const routeDefaults = { view: "summary", projectId: "", q: "", status: "", phase
 const viewer = readViewer();
 const state = {
   ...parseHash(),
-  projects: [], projectSummaries: null, summaryError: "", summaryRequestNumber: 0,
+  projects: [], projectSummaries: null, summaryError: "", summaryRequestNumber: 0, catalogRequestNumber: 0,
   snapshot: null, fetchError: "", routeNotice: "", connection: "接続を準備中",
   starting: false, sidebarCollapsed: false, sidebarOpen: false, disclosures: new Map(), detailOpener: null, copyFeedback: null, shortcutsOpener: null,
   starred: viewer.starred, recents: viewer.recents, visitedProject: "", pendingIssueVisit: false,
@@ -344,10 +344,20 @@ function directoryProjects() {
   const needle = state.q.trim().toLocaleLowerCase("ja");
   return (state.projectSummaries || []).filter((project) => (!state.type || project.adapter === state.type)
     && `${project.name} ${project.id}`.toLocaleLowerCase("ja").includes(needle)).sort((a, b) => {
+    const sessionOrder = compareSessionProjects(a, b);
+    if (sessionOrder) return sessionOrder;
     const byName = a.name.localeCompare(b.name, "ja", { numeric: true });
     const order = state.sort === "name" ? byName : (displayedMtime(a) ?? -Infinity) - (displayedMtime(b) ?? -Infinity);
     return (state.direction === "asc" ? 1 : -1) * order || byName;
   });
+}
+
+function compareSessionProjects(a, b) {
+  const sessionA = a.adapter === "claude-sessions", sessionB = b.adapter === "claude-sessions";
+  if (sessionA !== sessionB) return sessionA ? -1 : 1;
+  if (!sessionA) return 0;
+  return Number(Boolean(b.session_active)) - Number(Boolean(a.session_active))
+    || (displayedMtime(b) ?? 0) - (displayedMtime(a) ?? 0) || a.id.localeCompare(b.id);
 }
 
 function allIssues() {
@@ -421,7 +431,8 @@ function renderSidebar() {
   const recent = recentItems();
   $("#nav-recent").innerHTML = recent.map((item) => `<a href="${escape(projectHash(item.project.id, item.issue))}">${item.issue ? `<span class="nav-issue-key">${escape(item.issue)}</span><span>${escape(item.task?.title || item.issue)}<small>${escape(item.project.name)}</small>${projectReadBadge(item.project.id)}</span>` : `${projectIcon(item.project)}<span>${escape(item.project.name)}${projectReadBadge(item.project.id)}</span>`}</a>`).join("") || '<p class="note">まだ履歴はありません。</p>';
   $("#nav-starred").innerHTML = starred.map(projectLink).join("") || '<p class="note">スター付きはありません。</p>';
-  const ids = [...new Set([...state.starred, ...recent.map((item) => item.project.id)])];
+  const sessions = (state.projectSummaries || []).filter(project => project.adapter === "claude-sessions").sort(compareSessionProjects);
+  const ids = [...new Set([...sessions.map(project => project.id), ...state.starred, ...recent.map((item) => item.project.id)])];
   $("#nav-projects").innerHTML = ids.map((id) => state.projects.find((project) => project.id === id)).filter(Boolean).map(projectLink).join("") + '<a class="all-projects-link" href="#projects">すべてのプロジェクトを表示</a>';
   if (state.view === "for-you") $("#for-you-link").setAttribute("aria-current", "page");
   else $("#for-you-link").removeAttribute("aria-current");
@@ -833,7 +844,7 @@ async function refreshProject(id) {
   state.projectRequests.set(id, request);
   try {
     const snapshot = await readJson(`/api/projects/${encodeURIComponent(id)}`);
-    if (request !== state.projectRequests.get(id)) return;
+    if (request !== state.projectRequests.get(id) || !state.projects.some(project => project.id === id)) return;
     state.projectSnapshots.set(id, snapshot);
     state.projectErrors.delete(id);
     if (!globalView() && id === state.projectId) {
@@ -849,7 +860,7 @@ async function refreshProject(id) {
       } else if (changed || !snapshot.last_good) render();
     } else if (globalView()) render();
   } catch (error) {
-    if (request !== state.projectRequests.get(id)) return;
+    if (request !== state.projectRequests.get(id) || !state.projects.some(project => project.id === id)) return;
     const message = `データを取得できません（${error.message}）。接続が戻ると再取得します。`;
     state.projectErrors.set(id, message);
     if (!globalView() && id === state.projectId) state.fetchError = message;
@@ -882,8 +893,37 @@ async function refreshSummary() {
   renderFreshness();
 }
 
-async function refreshOverview() {
+async function refreshOverview(refreshList = true) {
+  if (refreshList) await refreshCatalog();
   await Promise.all([refreshSummary(), ...state.projects.map((project) => refreshProject(project.id))]);
+}
+
+async function refreshCatalog() {
+  const request = ++state.catalogRequestNumber;
+  try {
+    const projects = await readJson("/api/projects");
+    if (request !== state.catalogRequestNumber) return;
+    state.projects = projects;
+    const ids = new Set(projects.map(project => project.id));
+    if (state.projectSummaries) state.projectSummaries = state.projectSummaries.filter(project => ids.has(project.id));
+    for (const cache of [state.projectSnapshots, state.projectErrors]) {
+      for (const id of cache.keys()) if (!ids.has(id)) cache.delete(id);
+    }
+    // Invalidate pending requests for removed projects without reusing a number
+    // if the same folder reappears before an older request finishes.
+    for (const id of state.projectRequests.keys()) {
+      if (!ids.has(id)) state.projectRequests.set(id, state.projectRequests.get(id) + 1);
+    }
+    if (!globalView() && !ids.has(state.projectId)) {
+      state.snapshot = null;
+      applyRoute(projects.length ? parseHash() : { ...routeDefaults, view: "projects" }, true);
+    }
+  } catch (error) {
+    if (request === state.catalogRequestNumber) {
+      state.fetchError = `プロジェクト一覧を取得できません（${error.message}）。再接続時に読み直します。`;
+      renderFreshness();
+    }
+  }
 }
 
 async function start() {
@@ -893,7 +933,7 @@ async function start() {
     state.projects = await readJson("/api/projects");
     state.fetchError = "";
     applyRoute(landingRoute(location.hash, state.projects.length), true);
-    await refreshOverview();
+    await refreshOverview(false);
   } catch (error) {
     state.fetchError = `プロジェクト一覧を取得できません（${error.message}）。再接続時に読み直します。`;
     state.summaryError = state.fetchError;
@@ -1287,6 +1327,7 @@ events.addEventListener("project", async (event) => {
   const id = JSON.parse(event.data);
   if (state.projects.some((project) => project.id === id)) await Promise.all([refreshSummary(), refreshProject(id)]);
 });
+events.addEventListener("projects", refreshOverview);
 events.addEventListener("heartbeat", recheck);
 render();
 renderSidebarVisibility();

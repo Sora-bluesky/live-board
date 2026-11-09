@@ -5,7 +5,7 @@
     {
       "name": "live-board",
       "source": "./",
-      "description": "Open a local read-only progress board for project backlogs, WBS JSON and GitHub PR status."
+      "description": "Show what every Claude Code session is working on, on a local progress board grouped by project."
     }
   ]
 }

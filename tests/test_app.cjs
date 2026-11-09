@@ -1954,11 +1954,59 @@ async function descriptionProgress() {
   console.log("PASS description/progress: view coverage, baseline and live age, oldest doing, progress-only refresh, safe errors and zero count");
 }
 
+async function sessionFolderProjects() {
+  const projects = [{ id: "first", name: "Configured" }, { id: "alpha-123abc", name: "alpha" }, { id: "beta-456def", name: "beta" }];
+  const summary = (project, active, updated) => ({ ...project, adapter: "claude-sessions", session_active: active,
+    counts: { todo: 0, doing: active ? 1 : 0, blocked: 0, done: 0 }, total: 1, owner_wait: 0,
+    source_mtime: updated, loaded_at: "2026-11-09T00:00:00Z", error: null, warnings: [] });
+  const summaries = [{ ...summary(projects[0], false, 1), adapter: "wbs-cards" }, summary(projects[1], true, 10), summary(projects[2], false, 100)];
+  const ui = await app("#projects", {}, { projects, summaries });
+  assert.deepEqual(Array.from(ui.run("directoryProjects().map(project => project.id)")), ["alpha-123abc", "beta-456def", "first"]);
+  const sidebar = () => ui.element("#nav-projects").innerHTML;
+  assert.ok(sidebar().indexOf("alpha-123abc") < sidebar().indexOf("beta-456def"));
+  ui.run("toggleStar('alpha-123abc'); navigate({ view: 'for-you', homeTab: 'doing' })");
+  assert.match(ui.element("#content").innerHTML, /alpha/);
+
+  const gamma = { id: "gamma-789abc", name: "gamma" };
+  projects.splice(1, 0, gamma);
+  summaries.splice(1, 0, summary(gamma, true, 20));
+  ui.snapshots[gamma.id] = structuredClone(ui.snapshots["alpha-123abc"]);
+  ui.snapshots[gamma.id].last_good.rows.tasks[0].status = "doing";
+  ui.snapshots[gamma.id].last_good.rows.tasks[0].title = "New folder task";
+  await ui.events.projects();
+  assert.deepEqual(Array.from(ui.run("directoryProjects().map(project => project.id)")), [gamma.id, "alpha-123abc", "beta-456def", "first"]);
+  assert.ok(sidebar().indexOf(gamma.id) < sidebar().indexOf("alpha-123abc"));
+  assert.match(ui.element("#content").innerHTML, /New folder task/);
+  ui.run("navigate({ view: 'board', projectId: 'gamma-789abc' })");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(ui.location.hash, /gamma-789abc/);
+  assert.ok(ui.storage.get("live-board.viewer").includes("gamma-789abc"));
+
+  projects.splice(1, 1);
+  summaries.splice(1, 1);
+  ui.transport.failSummary = true;
+  await ui.events.projects();
+  assert.equal(ui.run("state.projectSnapshots.has('gamma-789abc')"), false);
+  assert.equal(ui.run("state.projectId"), "first");
+  assert.doesNotMatch(sidebar(), /gamma-789abc/);
+  assert.match(ui.element("#route-notice").textContent, /見つからない/);
+  assert.equal(ui.run("state.projectSummaries.some(project => project.id === 'gamma-789abc')"), false);
+  ui.transport.failSummary = false;
+  projects.splice(1);
+  summaries.splice(1);
+  await ui.events.heartbeat();
+  assert.equal(ui.run("state.projects.length"), 1);
+  assert.doesNotMatch(sidebar(), /alpha-123abc|beta-456def/);
+  assert.ok(ui.run("state.starred.includes('alpha-123abc')"), "Stable star survives a folder disappearing");
+  console.log("PASS session folders: active/update ordering, live catalog SSE, sidebar, For you, stars, recents, removal and heartbeat recovery");
+}
+
 async function main() {
   const selection = process.argv[2] || "all";
   assert.ok(["all", "filters", "owner", "issue-navigation", "clipboard-verbatim", "issue-copy-performance", "issue-copy", "shortcuts", "projects", "directory", "wbs", "unknown-statuses", "layout", "presentation", "compact-directory", "navigation", "search-click", "cross-project-errors", "directory-times", "project-dates", "pr", "activity"].includes(selection), `Unknown test selection: ${selection}`);
   if (selection === "layout") await layout();
   if (selection === "all") await codeReload();
+  if (selection === "all") await sessionFolderProjects();
   if (selection === "all") await stickyOffsets();
   if (selection === "all") await visibleLabels();
   if (selection === "all") await descriptionProgress();

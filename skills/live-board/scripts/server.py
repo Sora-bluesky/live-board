@@ -4,6 +4,7 @@ import fnmatch
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import logging
 import os
 from pathlib import Path, PureWindowsPath
 import re
@@ -13,7 +14,7 @@ import threading
 import time
 from urllib.parse import unquote, urlsplit
 
-from adapters import ADAPTERS
+from adapters import ADAPTERS, session_projects
 from pr_status import (
     PRFetchError, PR_REFRESH_SECONDS, cache_result, enrich_snapshot,
     fetch_pull_requests, validate_repo,
@@ -25,6 +26,7 @@ POLL_SECONDS = 1
 KEEPALIVE_SECONDS = 15
 CONTENT_CHECK_SECONDS = 30
 PROGRESS_CHECK_SECONDS = 5
+LOGGER = logging.getLogger(__name__)
 
 
 def now():
@@ -363,7 +365,7 @@ class ProjectState:
         self.progress_revision += 1
         return True
 
-    def check(self):
+    def check(self, session_result=None):
         with self.lock:
             previous_error = self.error
             previous_activity_revision = self.activity_revision
@@ -372,27 +374,39 @@ class ProjectState:
             progress_changed = False
             try:
                 source = Path(self.config["source"])
-                stat = source.stat()
-                signature = file_signature(stat)
-                self.source_mtime = stat.st_mtime
-                checked_at = time.monotonic()
-                content_due = self.content_checked_at is None or checked_at - self.content_checked_at >= CONTENT_CHECK_SECONDS
-                if signature == self.signature and self.error is None and not content_due:
-                    progress_changed = self.refresh_progress(self.last_good["rows"]["tasks"])
-                    return self._publish(self.last_good, None) or progress_changed
-                content_hash = hashlib.sha256(source.read_bytes()).digest()
-                changed = signature != self.signature or content_hash != self.content_hash
-                self.content_checked_at = checked_at
+                if self.config["adapter"] == "claude-sessions":
+                    # Atomic child replacements need not change the folder mtime;
+                    # time alone can also expire a session without any file write.
+                    result = session_result if session_result is not None else ADAPTERS["claude-sessions"](self.config)
+                    content_hash = hashlib.sha256(json_bytes(result)).digest()
+                    signature = ("claude-sessions", content_hash)
+                    updated = result["meta"]["updated"]
+                    self.source_mtime = datetime.fromisoformat(updated).timestamp() if updated else 0
+                    changed = signature != self.signature
+                else:
+                    stat = source.stat()
+                    signature = file_signature(stat)
+                    self.source_mtime = stat.st_mtime
+                    checked_at = time.monotonic()
+                    content_due = self.content_checked_at is None or checked_at - self.content_checked_at >= CONTENT_CHECK_SECONDS
+                    if signature == self.signature and self.error is None and not content_due:
+                        progress_changed = self.refresh_progress(self.last_good["rows"]["tasks"])
+                        return self._publish(self.last_good, None) or progress_changed
+                    content_hash = hashlib.sha256(source.read_bytes()).digest()
+                    changed = signature != self.signature or content_hash != self.content_hash
+                    self.content_checked_at = checked_at
+                    result = None
                 if not changed and self.error is None:
                     progress_changed = self.refresh_progress(self.last_good["rows"]["tasks"])
                     return self._publish(self.last_good, None) or progress_changed
                 self.signature = signature
                 self.content_hash = content_hash
-                result = ADAPTERS[self.config["adapter"]](self.config)
-                after = source.stat()
-                if signature != file_signature(after) or content_hash != hashlib.sha256(source.read_bytes()).digest():
-                    self.signature = None
-                    raise ValueError("読込中にファイルが変わりました。次の確認で読み直します。")
+                if result is None:
+                    result = ADAPTERS[self.config["adapter"]](self.config)
+                    after = source.stat()
+                    if signature != file_signature(after) or content_hash != hashlib.sha256(source.read_bytes()).digest():
+                        self.signature = None
+                        raise ValueError("読込中にファイルが変わりました。次の確認で読み直します。")
                 json_bytes({**result, "rows": {**result["rows"], "tasks": [
                     {key: value for key, value in task.items() if key != "source_fields"}
                     for task in result["rows"]["tasks"]
@@ -429,6 +443,15 @@ class ProjectState:
         with self.lock:
             return self.config.get("github_repo"), linked_pr_numbers(self.last_good)
 
+    def report_check_error(self, error):
+        # Unexpected exceptions may contain source contents or private paths.
+        message = f"プロジェクトを確認できません（{type(error).__name__}）。次の確認で再試行します。"
+        with self.lock:
+            changed = self.error is None or self.error["message"] != message
+            self._publish(self.last_good, {"message": message, "at": now()})
+            self.source_revision += changed
+            return changed
+
     def apply_pr_results(self, cached, requested):
         with self.lock:
             # Re-read active links under the publication lock: the source may have
@@ -464,7 +487,7 @@ class ProjectState:
         counts = {status: sum(task["status"] == status for task in tasks)
                   for status in ("todo", "doing", "blocked", "done")}
         counts["done"] += hidden
-        return {
+        summary = {
             "id": self.config["id"], "name": self.config["name"], "adapter": self.config["adapter"],
             "counts": counts if good else None, "total": len(tasks) + hidden if good else None,
             "done_hidden": hidden if good else None,
@@ -479,6 +502,9 @@ class ProjectState:
             "activity": {key: state["activity"][key] for key in ("count", "errors", "unmatched")},
             "progress": progress_summary(state["progress"]),
         }
+        if self.config["adapter"] == "claude-sessions":
+            summary["session_active"] = good["meta"]["session_active"] if good else False
+        return summary
 
 
 def project_configs(config):
@@ -503,6 +529,12 @@ def project_configs(config):
             or not Path(project["activity_dir"]).is_absolute()
         ):
             raise ValueError("activity_dir は空でない絶対パスにしてください。")
+        if project["adapter"] == "claude-sessions" and "hidden" in project:
+            hidden = project["hidden"]
+            if not isinstance(hidden, list) or any(
+                not isinstance(path, str) or not Path(path).is_absolute() for path in hidden
+            ):
+                raise ValueError("hidden は絶対パスの文字列の配列にしてください。")
         paths = ("source", "build_py") if project["adapter"] == "winsmux-backlog" else ("source",)
         if "build_py" in paths and (not isinstance(project.get("build_py"), str) or not project["build_py"]):
             raise ValueError("winsmux-backlog には build_py が必要です。")
@@ -514,33 +546,95 @@ def project_configs(config):
 
 class Board:
     def __init__(self, config, gh_runner=None, history_path=None):
-        history = CardHistory(history_path)
-        self.projects = {p["id"]: ProjectState(p, history) for p in project_configs(config)}
+        self.history = CardHistory(history_path)
+        self.configs = project_configs(config)
+        self.projects = {}
         self.condition = threading.Condition()
-        self.revisions = dict.fromkeys(self.projects, 0)
+        self.revisions = {}
+        self.catalog_revision = 0
         self.stopping = threading.Event()
         self.pr_wakeup = threading.Event()
         self.gh_runner = gh_runner
         self.pr_cache = {}
-        for project in self.projects.values():
-            project.check()
+        self.refresh_projects(initial=True)
         self.watcher = threading.Thread(target=self.watch, name="source-watcher", daemon=True)
         self.pr_worker = threading.Thread(target=self.refresh_prs, name="pr-fetcher", daemon=True)
         self.pr_wakeup.set()
 
     def notify(self, project_id):
         with self.condition:
+            if project_id not in self.revisions:
+                return
             self.revisions[project_id] += 1
+            self.condition.notify_all()
+
+    def refresh_projects(self, initial=False):
+        projects, changed = {}, set()
+        providers = [config for config in self.configs if config["adapter"] == "claude-sessions"]
+        sessions_expanded = False
+        for config in self.configs:
+            if config["adapter"] == "claude-sessions":
+                if sessions_expanded:
+                    continue
+                sessions_expanded = True
+                if len(providers) > 1:
+                    config = {**config, "session_providers": providers}
+                try:
+                    expanded, failed_sources = session_projects(config)
+                    current_ids = {item["id"] for item, result in expanded}
+                    preserved = {project.config["id"]: (project.config, None)
+                                 for project in self.projects.values()
+                                 if project.config["adapter"] == "claude-sessions"
+                                 and any(provider["source"] in failed_sources for provider in
+                                         project.config.get("session_providers", [project.config]))}
+                    # A partial read must not replace last-good provenance or content.
+                    expanded = [preserved.get(item["id"], (item, result)) for item, result in expanded]
+                    expanded.extend(entry for project_id, entry in preserved.items() if project_id not in current_ids)
+                except Exception as error:
+                    if not isinstance(error, (OSError, ValueError)):
+                        LOGGER.error("セッションの展開に失敗しました（%s）。", type(error).__name__)
+                    # Preserve last-good folders on read failure; their checks
+                    # publish the existing per-project error state.
+                    expanded = [(project.config, None) for project in self.projects.values()
+                                if project.config["adapter"] == "claude-sessions"]
+            else:
+                expanded = [(config, None)]
+            for item, result in expanded:
+                project_id = item["id"]
+                if project_id in projects:
+                    raise ValueError("展開後のプロジェクトIDが重複しています。")
+                project = self.projects.get(project_id)
+                if project is None:
+                    project = ProjectState(item, self.history)
+                else:
+                    project.config = item
+                source_revision = project.source_revision
+                try:
+                    project_changed = project.check(session_result=result)
+                except Exception as error:
+                    LOGGER.error("プロジェクトの確認に失敗しました（%s）。", type(error).__name__)
+                    project_changed = project.report_check_error(error)
+                if project_changed:
+                    changed.add(project_id)
+                    if project.source_revision != source_revision:
+                        self.pr_wakeup.set()
+                projects[project_id] = project
+        with self.condition:
+            if list(projects) != list(self.projects):
+                self.catalog_revision += 1
+            # Replace the mapping so concurrent HTTP/PR readers can finish
+            # iterating their previous, stable view of the project catalog.
+            self.projects = projects
+            self.revisions = {key: self.revisions.get(key, 0) + (key in changed and not initial)
+                              for key in projects}
             self.condition.notify_all()
 
     def watch(self):
         while not self.stopping.wait(POLL_SECONDS):
-            for project_id, project in self.projects.items():
-                source_revision = project.source_revision
-                if project.check():
-                    if project.source_revision != source_revision:
-                        self.pr_wakeup.set()
-                    self.notify(project_id)
+            try:
+                self.refresh_projects()
+            except Exception as error:
+                LOGGER.error("プロジェクトの更新に失敗しました（%s）。次の確認で再試行します。", type(error).__name__)
 
     def refresh_prs(self):
         while not self.stopping.is_set():
@@ -692,6 +786,7 @@ class Handler(BaseHTTPRequestHandler):
         board = self.server.board
         with board.condition:
             seen = board.revisions.copy()
+            catalog_seen = board.catalog_revision
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -703,17 +798,21 @@ class Handler(BaseHTTPRequestHandler):
         while not board.stopping.is_set():
             with board.condition:
                 board.condition.wait_for(
-                    lambda: board.stopping.is_set() or board.revisions != seen,
+                    lambda: board.stopping.is_set() or board.revisions != seen or board.catalog_revision != catalog_seen,
                     timeout=KEEPALIVE_SECONDS,
                 )
-                changed = [key for key in seen if seen[key] != board.revisions[key]]
+                changed = [key for key in board.revisions if seen.get(key) != board.revisions[key]]
+                catalog_changed = catalog_seen != board.catalog_revision
+                catalog_seen = board.catalog_revision
                 seen = board.revisions.copy()
             if board.stopping.is_set():
                 break
+            if catalog_changed:
+                self.wfile.write(b"event: projects\ndata: {}\n\n")
             if changed:
                 for project_id in changed:
                     self.wfile.write(f"event: project\ndata: {json.dumps(project_id)}\n\n".encode("utf-8"))
-            else:
+            elif not catalog_changed:
                 self.wfile.write(b"event: heartbeat\ndata: {}\n\n")
             self.wfile.flush()
 
