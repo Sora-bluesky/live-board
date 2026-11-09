@@ -4,7 +4,7 @@
 
 live-boardは、プロジェクトのバックログやWBSのJSONを読む、ローカル専用の進捗盤です。すでに管理している正本ファイルを監視し、変更をブラウザーへ自動で反映します。画面の文言は日本語です。
 
-![live-board demo](assets/demo.gif)
+![live-board demo](assets/demo-ja.gif)
 
 ## 表示するもの
 

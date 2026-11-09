@@ -6,3 +6,4 @@ projects.local.json*
 HANDOFF.md
 CLAUDE-SECURITY-*/
 node_modules/
+.claude/launch.json
