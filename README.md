@@ -2,7 +2,11 @@
 
 # live-board
 
-live-board is a local, read-only progress board for project backlogs and WBS JSON. It watches the source files you already maintain and updates the browser when they change. The UI is Japanese.
+live-board is a local progress board for people who run several Claude Code sessions on different projects at once.
+
+When each session works on its own project, it takes effort to check across conversations how far each one has got and which ones wait for your decision. Copying the tasks into a separate tracker is extra work.
+
+live-board reads the backlog (YAML) and WBS (`wbs.json`) files you already keep for each project, and shows every project on one board in the browser pane next to the chat in the Claude Code desktop app. The board updates when a file is saved, and one view lists the tasks waiting for you across all projects (for YAML backlogs, blocked tasks too). It only reads the files. Any browser can open it too. The UI is in Japanese.
 
 ![live-board demo](assets/demo.gif)
 
