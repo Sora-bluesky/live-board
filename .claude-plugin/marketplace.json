@@ -1,0 +1,11 @@
+{
+  "name": "live-board",
+  "owner": { "name": "Sora-bluesky" },
+  "plugins": [
+    {
+      "name": "live-board",
+      "source": "./",
+      "description": "Open a local read-only progress board for project backlogs, WBS JSON and GitHub PR status."
+    }
+  ]
+}

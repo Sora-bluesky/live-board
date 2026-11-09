@@ -1,0 +1,19 @@
+{
+  "projects": [
+    {
+      "id": "winsmux",
+      "name": "winsmux",
+      "adapter": "winsmux-backlog",
+      "source": "C:/path/to/winsmux/docs/backlog.yaml",
+      "build_py": "C:/path/to/winsmux/tools/backlog/build.py",
+      "github_repo": "owner/winsmux",
+      "activity_dir": "C:/path/to/winsmux/activity"
+    },
+    {
+      "id": "sample-wbs",
+      "name": "sample-wbs",
+      "adapter": "wbs-cards",
+      "source": "C:/path/to/sample-project/.claude/local/wbs/wbs.json"
+    }
+  ]
+}

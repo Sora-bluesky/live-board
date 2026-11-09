@@ -1,0 +1,20 @@
+meta:
+  product: 試験用
+  updated: '2026-10-31'
+  current_phase: P1
+phases:
+  - id: P1
+    title: 段階
+    order: 1
+versions:
+  - id: V1
+    title: 試験版
+    order: 1
+tasks:
+  - id: T1
+    title: 試験課題
+    status: doing
+    phase: P1
+    version: V1
+    deps: []
+    done_when: 試験が通る

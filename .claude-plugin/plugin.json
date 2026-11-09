@@ -1,0 +1,10 @@
+{
+  "name": "live-board",
+  "version": "0.1.0",
+  "description": "Open a local read-only progress board for project backlogs, WBS JSON and GitHub PR status.",
+  "author": { "name": "Sora-bluesky" },
+  "license": "MIT",
+  "homepage": "https://github.com/Sora-bluesky/live-board",
+  "repository": "https://github.com/Sora-bluesky/live-board",
+  "keywords": ["progress", "backlog", "wbs", "github", "local"]
+}

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>進捗盤 · live-board</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">課題へ移動</a>
+  <div class="global-header" id="global-header">
+  <div id="freshness" class="freshness warning" role="status" aria-live="polite">
+    <span id="file-time">正本ファイルの更新 —</span>
+    <span id="description-time" hidden>進行中カードなし</span>
+    <span id="check-time">最終確認 —</span>
+    <span id="connection">接続を準備中</span>
+    <strong id="freshness-message">読込を待っています</strong>
+  </div>
+  <header class="top-bar" id="top-bar">
+    <button id="menu-toggle" class="icon-button menu-toggle" type="button" aria-label="ナビゲーションを開く" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+    <a class="product-name" href="#for-you">live-board</a>
+    <form id="global-search-form" class="global-search" role="search" aria-label="全プロジェクトを検索">
+      <label class="search-field"><span class="sr-only">プロジェクトと課題を検索</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input id="global-search" type="search" placeholder="すべてを検索" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="search-results" aria-keyshortcuts="/"><kbd aria-hidden="true">/</kbd></label>
+      <div id="search-results" class="search-results" role="listbox" aria-label="検索結果" hidden></div>
+    </form>
+  </header>
+  </div>
+  <div id="error-banner" class="error-banner" role="alert" hidden></div>
+  <div id="route-notice" class="error-banner" role="status" hidden></div>
+  <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+  <div class="workspace" id="workspace">
+    <aside class="sidebar" id="sidebar" aria-label="共通ナビゲーション">
+      <div class="sidebar-heading"><span class="nav-label">ワークスペース</span><button id="sidebar-toggle" class="icon-button" type="button" aria-label="サイドバーを折りたたむ" aria-expanded="true" aria-controls="global-nav" aria-keyshortcuts="Control+["><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button></div>
+      <nav id="global-nav" class="global-nav" aria-label="ワークスペース">
+        <a id="for-you-link" href="#for-you" class="global-nav-item" title="あなた向け"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m3 10 9-7 9 7M5 9v12h5v-7h4v7h5V9"/></svg></span><span class="nav-text">あなた向け</span></a>
+        <details data-nav-section="recent"><summary title="最近"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><span class="nav-text">最近</span></summary><div id="nav-recent" class="nav-children"></div></details>
+        <details data-nav-section="starred"><summary title="スター付き"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/></svg></span><span class="nav-text">スター付き</span></summary><div id="nav-starred" class="nav-children"></div></details>
+        <details data-nav-section="projects" open><summary title="プロジェクト"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z"/></svg></span><span class="nav-text">プロジェクト</span></summary><div id="nav-projects" class="nav-children"></div></details>
+      </nav>
+      <div class="sidebar-footer"><span class="readonly-dot" aria-hidden="true"></span><span>表示専用</span></div>
+    </aside>
+    <main class="main-area" id="main-area">
+      <header class="page-header">
+        <nav id="project-breadcrumb" class="breadcrumb" aria-label="パンくず"><a href="#projects">プロジェクト</a><span aria-hidden="true">/</span><span id="breadcrumb-project">進捗盤</span></nav>
+        <div class="title-row"><h1 id="project-name">進捗盤</h1><span id="project-star"></span><span class="read-only">表示専用</span></div>
+        <p id="project-meta" class="note">正本ファイルを確認しています。</p>
+      </header>
+      <details id="style-warnings" class="style-warnings" hidden>
+        <summary id="style-warnings-summary"></summary>
+        <ul id="style-warnings-list"></ul>
+      </details>
+      <nav id="project-tabs" class="project-tabs" aria-label="プロジェクトの表示">
+        <a href="#summary" data-view="summary">概要</a>
+        <a href="#timeline" data-view="timeline">タイムライン</a>
+        <a href="#backlog" data-view="backlog">バックログ</a>
+        <a href="#board" data-view="board">ボード</a>
+        <a href="#list" data-view="list">一覧</a>
+        <a href="#releases" data-view="releases">リリース</a>
+      </nav>
+      <form id="filters" class="filter-row" role="search" aria-label="すべてのビューを絞り込み">
+        <label class="search-field"><span class="sr-only">課題を検索</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input id="search" name="q" type="search" placeholder="課題を検索" autocomplete="off"></label>
+        <label class="filter-field"><span>状態</span><select id="filter-status" data-filter="status"><option value="">すべて</option><option value="todo">未着手</option><option value="doing">進行中</option><option value="blocked">待ち</option><option value="done">済み</option></select></label>
+        <label class="filter-field"><span>段階</span><select id="filter-phase" data-filter="phase"><option value="">すべて</option></select></label>
+        <label id="version-filter" class="filter-field" hidden><span>版</span><select id="filter-version" data-filter="version"><option value="">すべて</option></select></label>
+        <label class="ready-toggle"><input id="filter-ready" type="checkbox" data-filter="ready" role="switch"><span class="switch-track" aria-hidden="true"></span><span>着手できる課題だけ</span></label>
+        <label class="ready-toggle"><input id="filter-owner" type="checkbox" data-filter="owner" role="switch"><span class="switch-track" aria-hidden="true"></span><span>自分待ちの課題だけ</span></label>
+        <button id="clear-filters" class="text-button" type="button">絞り込みを解除</button>
+      </form>
+      <form id="project-tools" class="filter-row" role="search" aria-label="プロジェクトを絞り込み" hidden>
+        <label class="search-field"><span class="sr-only">プロジェクトを検索</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input id="project-search" type="search" placeholder="プロジェクトを検索" autocomplete="off"></label>
+        <label class="filter-field"><span class="sr-only">種類で絞り込み</span><select id="project-type" aria-label="種類で絞り込み"><option value="">種類で絞り込み</option></select></label>
+      </form>
+      <div class="view-meta"><span id="result-count" role="status" aria-live="polite">課題を読込中</span><span id="filter-note" class="note" hidden>絞り込み中</span></div>
+      <div id="content" tabindex="-1" aria-busy="true"><p class="empty">読み込み中です。</p></div>
+      <footer class="footnote">正本ファイルの変更を自動で読み込みます。カードの記述は書いた時点の内容です。</footer>
+    </main>
+  </div>
+  <div id="detail-backdrop" class="detail-backdrop" hidden></div>
+  <aside id="issue-panel" class="issue-panel" role="dialog" aria-labelledby="issue-heading" tabindex="-1" hidden></aside>
+  <dialog id="shortcuts-dialog" class="shortcuts-dialog" aria-labelledby="shortcuts-heading">
+    <h2 id="shortcuts-heading">キーボードショートカット</h2>
+    <dl class="shortcuts-list">
+      <div><dt><kbd>/</kbd></dt><dd>すべてを検索</dd></div>
+      <div><dt><kbd>Esc</kbd></dt><dd>開いている検索・詳細・ダイアログを閉じる</dd></div>
+      <div><dt><kbd>Ctrl+[</kbd></dt><dd>サイドバーを開閉</dd></div>
+      <div><dt><kbd>J</kbd> / <kbd>K</kbd></dt><dd>次の課題 / 前の課題</dd></div>
+      <div><dt><kbd>?</kbd></dt><dd>このダイアログを開く</dd></div>
+    </dl>
+    <button id="shortcuts-close" type="button" class="text-button">閉じる</button>
+  </dialog>
+  <noscript><p class="error-banner">進捗盤の表示にはJavaScriptが必要です。</p></noscript>
+</body>
+</html>
