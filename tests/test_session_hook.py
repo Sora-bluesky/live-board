@@ -242,6 +242,11 @@ class SessionHookTests(unittest.TestCase):
         self.assertEqual(self.tool(tool, {"other": 1})["tasks"], indexed["tasks"])
         self.assertEqual([task["text"] for task in initial["tasks"]], ["実装", "確認", "公開"])
 
+    def test_wrap_up_completes_all_tasks(self):
+        initial = self.tool("mcp__ccd_turn__update_plan", {"items": self.todos()})["tasks"]
+        tasks = self.tool("mcp__ccd_turn__wrap_up", {})["tasks"]
+        self.assertEqual(tasks, [{**task, "status": "completed"} for task in initial])
+
     def test_update_plan_advance_without_current_and_bounds(self):
         tool = "mcp__other__update_plan"
         self.tool(tool, {"items": [{"content": "確認", "status": "pending"}]})
@@ -349,7 +354,7 @@ class SessionHookTests(unittest.TestCase):
         manifest = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]
         self.assertEqual(set(manifest), {"SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse"})
         self.assertEqual(manifest["PreToolUse"][0]["matcher"], "AskUserQuestion")
-        self.assertEqual(manifest["PostToolUse"][0]["matcher"], "TaskCreate|TaskUpdate|TodoWrite|AskUserQuestion|mcp__.*__update_plan")
+        self.assertEqual(manifest["PostToolUse"][0]["matcher"], "TaskCreate|TaskUpdate|TodoWrite|AskUserQuestion|mcp__.*__update_plan|mcp__.*__wrap_up")
         for entries in manifest.values():
             self.assertEqual(entries[0]["hooks"], [{"type": "command", "timeout": 5,
                 "command": 'python "${CLAUDE_PLUGIN_ROOT}/skills/live-board/scripts/tools/session_hook.py" "${CLAUDE_PLUGIN_DATA}"'}])

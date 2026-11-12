@@ -118,6 +118,9 @@ def apply_event(record, data, timestamp):
                         task["text"] = sanitize_text(value["subject"])
             elif tool == "TodoWrite":
                 record["tasks"] = task_list(value["todos"], "content")
+            elif isinstance(tool, str) and re.fullmatch(r"mcp__.*__wrap_up", tool):
+                for task in record["tasks"]:
+                    task["status"] = "completed"
             elif isinstance(tool, str) and re.fullmatch(r"mcp__.*__update_plan", tool):
                 if "items" in value:
                     record["tasks"] = task_list(value["items"], "content")
